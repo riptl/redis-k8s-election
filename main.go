@@ -31,6 +31,7 @@ func main() {
 	leaderSvcName := flag.String("leader-service", "", "Name of the Service exposing the leader")
 	lockName := flag.String("lock", "", "Name of the Kubernetes lease lock")
 	redisPort := flag.Uint("redis-port", 6379, "Port under which this pod and peer pods expose Redis")
+	klog.InitFlags(flag.CommandLine)
 	flag.Parse()
 	flag.Visit(func(f *flag.Flag) {
 		delete(requiredFlags, f.Name)
@@ -80,7 +81,7 @@ func main() {
 	})
 	defer redisClient.Close()
 	if err := redisClient.Ping(ctx); err != nil {
-		klog.Fatal("Failed to get initial ping from Redis")
+		klog.Fatal("Failed to get initial ping from Redis: ", err)
 	}
 	klog.V(2).Info("Successful initial ping from Redis")
 
