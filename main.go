@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"os/signal"
@@ -24,14 +25,17 @@ import (
 )
 
 var requiredFlags = map[string]struct{}{
-	"leader-service": {},
-	"lock":           {},
+	"leader-service":   {},
+	"lock":             {},
+	"headless-service": {},
 }
 
 func main() {
 	leaderSvcName := flag.String("leader-service", "", "Name of the Service exposing the leader")
 	lockName := flag.String("lock", "", "Name of the Kubernetes lease lock")
 	redisPort := flag.Uint("redis-port", 6379, "Port under which this pod and peer pods expose Redis")
+	clusterDomain := flag.String("cluster-domain", "cluster.local", "Kubernetes cluster domain")
+	headlessSvcName := flag.String("headless-service", "", "Name of the headless service attached to the StatefulSet")
 	klog.InitFlags(flag.CommandLine)
 	flag.Parse()
 	flag.Visit(func(f *flag.Flag) {
@@ -122,7 +126,8 @@ func main() {
 					klog.V(2).Info("I am the Redis leader")
 					return
 				}
-				if err := setReplicaOf(ctx, redisClient, identity, redisPortStr); err != nil {
+				podDNS := fmt.Sprintf("%s.%s.%s.svc.%s", identity, *headlessSvcName, namespace, *clusterDomain)
+				if err := setReplicaOf(ctx, redisClient, podDNS, redisPortStr); err != nil {
 					klog.Fatal("Failed to replicate new leader: ", err)
 				}
 			},
