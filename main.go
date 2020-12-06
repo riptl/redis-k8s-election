@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -53,7 +54,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		c := make(chan os.Signal)
-		signal.Notify(c, os.Interrupt)
+		signal.Notify(c, syscall.SIGTERM)
 		<-c
 		cancel()
 	}()
@@ -147,9 +148,10 @@ func setReplicaOf(ctx context.Context, rd *redis.Client, host, port string) erro
 		if err := pipe.SlaveOf(ctx, host, port).Err(); err != nil {
 			return err
 		}
-		if err := pipe.ConfigRewrite(ctx).Err(); err != nil {
-			return err
-		}
+		// TODO Should config be persisted
+		//if err := pipe.ConfigRewrite(ctx).Err(); err != nil {
+		//	return err
+		//}
 		if err := pipe.ClientKillByFilter(ctx, "TYPE", "normal").Err(); err != nil {
 			return err
 		}
@@ -163,7 +165,7 @@ func setReplicaOf(ctx context.Context, rd *redis.Client, host, port string) erro
 
 // updateLeaderService points the leader Kubernetes service to the current Redis leader pod.
 func updateLeaderService(ctx context.Context, services corev1.ServiceInterface, svc, pod string) (err error) {
-	klog.V(2).Infof("Setting leader service selector to pod ", pod)
+	klog.V(2).Info("Setting leader service selector to pod ", pod)
 	patches := []jsonPatchOp{
 		{
 			Op:   "replace",
