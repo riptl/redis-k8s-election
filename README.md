@@ -37,6 +37,81 @@ Reasons to instead use Redis Sentinel or [ledisdb/redis-failover](https://github
 
 For further information, please check the [Redis Sentinel Documentation](https://redis.io/topics/sentinel).
 
+## Quickstart
+
+The manifests at `examples/cluster.yaml` deploy a three-node Redis leader/replica cluster.
+
+```shell script
+kubectl create namespace redis-k8s-election
+kubectl apply -n redis-k8s-election -f https://raw.githubusercontent.com/terorie/redis-k8s-election/main/examples/cluster.yaml
+```
+
+Connect to the leader for read/write access:
+
+```shell script
+kubectl port-forward -n redis-k8s-election svc/redis-leader 6378:6379
+redis-cli -p 6378 info replication
+```
+
+Or any of the nodes for read access:
+
+```shell script
+kubectl port-forward -n redis-k8s-election svc/redis-replica 6379
+redis-cli -p 6379 info replication
+```
+
+### Election results
+
+`redis-0` gets created first, winning the leader election.
+`redis-1` and `redis-2` will follow.
+
+```
+$ kubectl logs -n redis-k8s-election redis-0 -c redis-k8s-election
+I1206 04:23:06.496554       1 main.go:75] Connecting to Redis: localhost:6379
+I1206 04:23:06.525680       1 main.go:91] Successful initial ping from Redis
+I1206 04:23:06.525737       1 leaderelection.go:242] attempting to acquire leader lease  redis-k8s-election/redis-leader-lock...
+I1206 04:23:06.543659       1 leaderelection.go:252] successfully acquired lease redis-k8s-election/redis-leader-lock
+I1206 04:23:06.543864       1 main.go:126] I am the Redis leader
+I1206 04:23:06.544041       1 main.go:173] Setting leader service selector to pod redis-0
+I1206 04:23:06.554853       1 main.go:151] Setting Redis to replicate NO ONE
+
+$ kubectl logs -n redis-k8s-election redis-1 -c redis-k8s-election
+I1206 04:23:17.443600       1 main.go:75] Connecting to Redis: localhost:6379
+I1206 04:23:17.468970       1 main.go:91] Successful initial ping from Redis
+I1206 04:23:17.475652       1 leaderelection.go:345] lock is held by redis-0 and has not yet expired
+I1206 04:23:17.475695       1 main.go:151] Setting Redis to replicate redis-0.redis.redis-k8s-election.svc.cluster.local 6379
+
+$ kubectl logs -n redis-k8s-election redis-2 -c redis-k8s-election
+I1206 04:23:33.294719       1 main.go:75] Connecting to Redis: localhost:6379
+I1206 04:23:33.320662       1 main.go:91] Successful initial ping from Redis
+I1206 04:23:33.328167       1 leaderelection.go:345] lock is held by redis-0 and has not yet expired
+I1206 04:23:33.328212       1 main.go:151] Setting Redis to replicate redis-0.redis.redis-k8s-election.svc.cluster.local 6379
+```
+
+To test failover, try to terminate `redis-0`.
+`redis-1` wins the next election and `redis-2` switches its replica config.
+
+```
+$ kubectl logs -n redis-k8s-election redis-1 -c redis-k8s-election
+I1206 04:25:17.886144       1 leaderelection.go:252] successfully acquired lease redis-k8s-election/redis-leader-lock
+I1206 04:25:17.886282       1 main.go:126] I am the Redis leader
+I1206 04:25:17.886439       1 main.go:173] Setting leader service selector to pod redis-1
+I1206 04:25:17.908234       1 main.go:151] Setting Redis to replicate NO ONE
+
+$ kubectl logs -n redis-k8s-election redis-2 -c redis-k8s-election
+I1206 04:25:19.447584       1 leaderelection.go:345] lock is held by redis-1 and has not yet expired
+I1206 04:25:19.447701       1 main.go:151] Setting Redis to replicate redis-1.redis.redis-k8s-election.svc.cluster.local 6379
+I1206 04:25:22.121783       1 leaderelection.go:345] lock is held by redis-1 and has not yet expired
+```
+
+To clean up your resources when you are done:
+
+```shell script
+kubectl delete -n redis-k8s-election -f https://raw.githubusercontent.com/terorie/redis-k8s-election/main/examples/cluster.yaml
+kubectl get -n redis-k8s-election pvc -l app=redis,role=node -o name | xargs kubectl delete -n redis-k8s-election
+kubectl delete namespace redis-k8s-election
+```
+
 ## Architecture
 
 TODO: Properly explain this
