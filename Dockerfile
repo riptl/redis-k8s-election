@@ -6,3 +6,4 @@ RUN go build -o /root/redis-k8s-election
 FROM alpine
 COPY --from=builder /root/redis-k8s-election /usr/bin/
 ENTRYPOINT ["/usr/bin/redis-k8s-election"]
+LABEL org.opencontainers.image.source="https://github.com/terorie/redis-k8s-election"
