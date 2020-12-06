@@ -80,7 +80,7 @@ func main() {
 		WriteTimeout:    3 * time.Second,
 	})
 	defer redisClient.Close()
-	if err := redisClient.Ping(ctx); err != nil {
+	if err := redisClient.Ping(ctx).Err(); err != nil {
 		klog.Fatal("Failed to get initial ping from Redis: ", err)
 	}
 	klog.V(2).Info("Successful initial ping from Redis")
