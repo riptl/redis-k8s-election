@@ -127,10 +127,10 @@ Service discovery
 
 * Clients use Kubernetes Services to connect to Redis.
 * All Redis clients are supported, no Sentinel client logic involved.
-* The `redis` service connects to any Redis instance and supports read-only clients.
+* The `redis-replica` service connects to any Redis instance and supports read-only clients.
 * The `redis-leader` service connects to the current leader.
-  Clients are disconnected via [`CLIENT KILL`](https://redis.io/commands/client-kill)
-  when the leader changes, to force them to reconnect to the right one.
+  The election sidecar proxies all connections to the leader,
+  ensuring Redis is only reached when really talking with the leader.
 
 ## Motivation
 
@@ -145,3 +145,6 @@ algorithms for achieving distributed consensus written in C.
 ## Attributions
 
 Author: [Richard Patel](https://github.com/terorie)
+
+Kubernetes manifests (example/cluster.yaml) based on
+[Bitnami Redis Helm chart](https://github.com/bitnami/charts/tree/master/bitnami/redis).

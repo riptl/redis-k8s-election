@@ -18,7 +18,7 @@ spec:
   - metadata:
       name: redis-data
       labels:
-        app: reids
+        app: redis
     spec:
       accessModes:
       - ReadWriteOnce
@@ -114,6 +114,8 @@ spec:
         args:
         - -redis-port
         - "6379"
+        - -leader-port
+        - "6378"
         - -leader-service
         - "redis-leader"
         - -headless-service
@@ -122,6 +124,9 @@ spec:
         - "redis-leader-lock"
         - -v
         - "4"
+        ports:
+        - name: redis-leader
+          containerPort: 6378
         resources:
           requests:
             memory: 20Mi
@@ -173,7 +178,7 @@ spec:
   ports:
   - name: redis-leader
     port: 6379
-    targetPort: 6379
+    targetPort: 6378
   selector: {}
 ---
 apiVersion: v1
