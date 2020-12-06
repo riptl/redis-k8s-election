@@ -10,10 +10,12 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/google/tcpproxy"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -33,7 +35,8 @@ var requiredFlags = map[string]struct{}{
 func main() {
 	leaderSvcName := flag.String("leader-service", "", "Name of the Service exposing the leader")
 	lockName := flag.String("lock", "", "Name of the Kubernetes lease lock")
-	redisPort := flag.Uint("redis-port", 6379, "Port under which this pod and peer pods expose Redis")
+	redisPort := flag.Uint("redis-port", 6379, "Port exposed by Redis server")
+	leaderPort := flag.Uint("leader-port", 6378, "Port exposed by this sidecar for accepting leader connections")
 	clusterDomain := flag.String("cluster-domain", "cluster.local", "Kubernetes cluster domain")
 	headlessSvcName := flag.String("headless-service", "", "Name of the headless service attached to the StatefulSet")
 	klog.InitFlags(flag.CommandLine)
@@ -53,6 +56,10 @@ func main() {
 		klog.Fatal("Invalid value for -redis-port")
 	}
 	redisPortStr := strconv.FormatUint(uint64(*redisPort), 10)
+	if *leaderPort <= 0 || *leaderPort > 0xFFFF {
+		klog.Fatal("Invalid value for -leader-port")
+	}
+	leaderListen := ":" + strconv.FormatUint(uint64(*leaderPort), 10)
 
 	// Build context that cancels with SIGINT.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -90,6 +97,11 @@ func main() {
 	}
 	klog.V(2).Info("Successful initial ping from Redis")
 
+	// Initialize TCP proxy for leader.
+	var proxy tcpproxy.Proxy
+	proxy.AddRoute(leaderListen, tcpproxy.To("localhost:6379"))
+	var proxyLock sync.Mutex
+
 	// Start Kubernetes leader election.
 	lec := leaderelection.LeaderElectionConfig{
 		Name: "redis",
@@ -119,8 +131,30 @@ func main() {
 					cancel()
 					return
 				}
+				proxyLock.Lock()
+				proxyErr := proxy.Start()
+				proxyLock.Unlock()
+				if proxyErr != nil {
+					klog.Error("Failed to start leader TCP proxy: ", proxyErr)
+					cancel()
+					return
+				}
+				go func() {
+					if err := proxy.Wait(); err != nil {
+						klog.Fatal("Leader TCP proxy failed: ", err)
+					}
+				}()
+				klog.V(2).Info("Started leader TCP proxy at ", leaderListen)
 			},
-			OnStoppedLeading: func() {},
+			OnStoppedLeading: func() {
+				proxyLock.Lock()
+				proxyErr := proxy.Close()
+				proxyLock.Unlock()
+				if proxyErr != nil {
+					klog.Fatal("Failed to stop leader TCP proxy: ", proxyErr)
+				}
+				klog.V(2).Info("Stopped leader TCP proxy")
+			},
 			OnNewLeader: func(identity string) {
 				if identity == hostname {
 					klog.V(2).Info("I am the Redis leader")
