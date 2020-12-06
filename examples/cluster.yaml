@@ -33,6 +33,7 @@ spec:
     spec:
       securityContext:
         runAsUser: 0
+      serviceAccountName: redis
       volumes:
       - name: start-scripts
         configMap:
@@ -117,6 +118,8 @@ spec:
         - "redis-leader"
         - -lock
         - "redis-leader-lock"
+        - -v
+        - "4"
         resources:
           requests:
             memory: 20Mi
@@ -142,7 +145,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: redis
+  name: redis-leader
   labels:
     app: redis
     role: node
@@ -153,6 +156,43 @@ spec:
     port: 6379
     targetPort: 6379
   selector: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: redis
+  labels:
+    app: redis
+    role: node
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: redis
+  labels:
+    app: redis
+rules:
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["patch"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: redis
+  labels:
+    app: redis
+    role: node
+subjects:
+- kind: ServiceAccount
+  name: redis
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: redis
 ---
 apiVersion: v1
 kind: ConfigMap
