@@ -1,0 +1,269 @@
+# Deploys a three-node Redis cluster with persistence.
+# Based on bitnami/redis.
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  labels:
+    app: redis
+spec:
+  replicas: 3
+  serviceName: redis
+  selector:
+    matchLabels:
+      app: redis
+      role: node
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-data
+      labels:
+        app: reids
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 512Mi
+  template:
+    metadata:
+      labels:
+        app: redis
+        role: node
+    spec:
+      securityContext:
+        runAsUser: 0
+      volumes:
+      - name: start-scripts
+        configMap:
+          name: redis-scripts
+          defaultMode: 0755
+      - name: health
+        configMap:
+          name: redis-health
+          defaultMode: 0755
+      - name: config
+        configMap:
+          name: redis
+      - name: redis-tmp-conf
+        emptyDir: {}
+      containers:
+      - name: redis
+        image: bitnami/redis
+        securityContext:
+          runAsUser: 0
+        command:
+        - /bin/bash
+        - -c
+        - /opt/bitnami/scripts/start-scripts/start-node.sh
+        env:
+        - name: REDIS_MASTER_PORT_NUMBER
+          value: "6379"
+        - name: ALLOW_EMPTY_PASSWORD
+          value: "yes"
+        - name: REDIS_TLS_ENABLED
+          value: "no"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_DATA_DIR
+          value: "/data"
+        ports:
+        - name: redis
+          containerPort: 6379
+        livenessProbe:
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 5
+          exec:
+            command:
+            - sh
+            - -c
+            - /health/ping_liveness_local_and_master.sh 5
+        readinessProbe:
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 5
+          exec:
+            command:
+            - sh
+            - -c
+            - /health/ping_readiness_local_and_master.sh 5
+        resources:
+          requests:
+            memory: 64Mi
+            cpu: 100m
+        volumeMounts:
+        - name: start-scripts
+          mountPath: /opt/bitnami/scripts/start-scripts
+        - name: health
+          mountPath: /health
+        - name: redis-data
+          mountPath: /data
+        - name: config
+          mountPath: /opt/bitnami/redis/mounted-etc
+        - name: redis-tmp-conf
+          mountPath: /opt/bitnami/redis/etc
+      - name: redis-k8s-election
+        image: ghcr.io/terorie/redis-k8s-election
+        imagePullPolicy: Always
+        args:
+        - -redis-port
+        - "6379"
+        - -leader-service
+        - "redis-leader"
+        - -lock
+        - "redis-leader-lock"
+        resources:
+          requests:
+            memory: 20Mi
+            cpu: 50m
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels:
+    app: redis
+    role: node
+spec:
+  type: ClusterIP
+  ports:
+  - name: redis
+    port: 6379
+    targetPort: 6379
+  selector:
+    app: redis
+    role: node
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels:
+    app: redis
+    role: node
+spec:
+  type: ClusterIP
+  ports:
+  - name: redis-leader
+    port: 6379
+    targetPort: 6379
+  selector: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis
+  labels:
+    app: redis
+data:
+  master.conf: |-
+    dir /data
+    rename-command FLUSHDB ""
+    rename-command FLUSHALL ""
+  redis.conf: |-
+    # User-supplied configuration:
+    # Enable AOF https://redis.io/topics/persistence#append-only-file
+    appendonly yes
+    # Disable RDB persistence, AOF persistence already enabled.
+    save ""
+  replica.conf: |-
+    dir /data
+    slave-read-only yes
+    rename-command FLUSHDB ""
+    rename-command FLUSHALL ""
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-health
+  labels:
+    app: redis
+data:
+  ping_liveness_local.sh: |-
+    #!/bin/bash
+    export REDISCLI_AUTH="$REDIS_PASSWORD"
+    response=$(
+      timeout -s 3 $1 \
+      redis-cli \
+        -h localhost \
+        -p $REDIS_PORT \
+        ping
+    )
+    if [ "$response" != "PONG" ] && [ "$response" != "LOADING Redis is loading the dataset in memory" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_liveness_local_and_master.sh: |-
+    script_dir="$(dirname "$0")"
+    exit_status=0
+    "$script_dir/ping_liveness_local.sh" $1 || exit_status=$?
+    "$script_dir/ping_liveness_master.sh" $1 || exit_status=$?
+    exit $exit_status
+  ping_liveness_master.sh: |-
+    #!/bin/bash
+    export REDISCLI_AUTH="$REDIS_MASTER_PASSWORD"
+    response=$(
+      timeout -s 3 $1 \
+      redis-cli \
+        -h $REDIS_MASTER_HOST \
+        -p $REDIS_MASTER_PORT_NUMBER \
+        ping
+    )
+    if [ "$response" != "PONG" ] && [ "$response" != "LOADING Redis is loading the dataset in memory" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_readiness_local.sh: |-
+    #!/bin/bash
+    export REDISCLI_AUTH="$REDIS_PASSWORD"
+    response=$(
+      timeout -s 3 $1 \
+      redis-cli \
+        -h localhost \
+        -p $REDIS_PORT \
+        ping
+    )
+    if [ "$response" != "PONG" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_readiness_local_and_master.sh: |-
+    script_dir="$(dirname "$0")"
+    exit_status=0
+    "$script_dir/ping_readiness_local.sh" $1 || exit_status=$?
+    "$script_dir/ping_readiness_master.sh" $1 || exit_status=$?
+    exit $exit_status
+  ping_readiness_master.sh: |-
+    #!/bin/bash
+    export REDISCLI_AUTH="$REDIS_MASTER_PASSWORD"
+    response=$(
+      timeout -s 3 $1 \
+      redis-cli \
+        -h $REDIS_MASTER_HOST \
+        -p $REDIS_MASTER_PORT_NUMBER \
+        ping
+    )
+    if [ "$response" != "PONG" ]; then
+      echo "$response"
+      exit 1
+    fi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-scripts
+  labels:
+    app: redis
+data:
+  start-node.sh: |
+    #!/bin/bash
+    if [[ ! -f /opt/bitnami/redis/etc/redis.conf ]];then
+      cp /opt/bitnami/redis/mounted-etc/redis.conf /opt/bitnami/redis/etc/redis.conf
+    fi
+    touch /data/redisboot.lock
+    exec redis-server --port 6379 --protected-mode no --include /opt/bitnami/redis/etc/redis.conf
